@@ -92,7 +92,7 @@ install: compiler
 	@echo "Installing to" $(DESTDIR)$(prefix)
 	@$(MKDIR_PARENT) $(DESTDIR)$(bindir)
 	$(INSTALL_PROGRAM) $(project_dir)/bin/oscar64 $(DESTDIR)$(bindir)
-	@$(MKDIR_PARENT) $(DESTDIR)$(includedir)/oscar64/{audio,c64,c128,cx16,gfx,nes,opp,plus4,vic20}
+	@$(MKDIR_PARENT) $(DESTDIR)$(includedir)/oscar64/{audio,c64,c128,cx16,gfx,nes,opp,plus4,vic20,mega65}
 	$(INSTALL_DATA) $(wildcard $(project_dir)/include/*.h $(project_dir)/include/*.c) $(DESTDIR)$(includedir)/oscar64
 	$(INSTALL_DATA) $(wildcard $(project_dir)/include/audio/*.h $(project_dir)/include/audio/*.c) $(DESTDIR)$(includedir)/oscar64/audio
 	$(INSTALL_DATA) $(wildcard $(project_dir)/include/c64/*.h $(project_dir)/include/c64/*.c) $(DESTDIR)$(includedir)/oscar64/c64
@@ -103,6 +103,7 @@ install: compiler
 	$(INSTALL_DATA) $(wildcard $(project_dir)/include/opp/*.h $(project_dir)/include/opp/*.cpp) $(DESTDIR)$(includedir)/oscar64/opp
 	$(INSTALL_DATA) $(wildcard $(project_dir)/include/plus4/*.h $(project_dir)/include/plus4/*.c) $(DESTDIR)$(includedir)/oscar64/plus4
 	$(INSTALL_DATA) $(wildcard $(project_dir)/include/vic20/*.h $(project_dir)/include/vic20/*.c) $(DESTDIR)$(includedir)/oscar64/vic20
+	$(INSTALL_DATA) $(wildcard $(project_dir)/include/mega65/*.h $(project_dir)/include/mega65/*.c) $(DESTDIR)$(includedir)/oscar64/mega65
 
 
 uninstall:
