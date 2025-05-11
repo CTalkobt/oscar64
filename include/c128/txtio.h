@@ -2,6 +2,7 @@
 #define TXTIO_C128_H
 
 #include <conio.h>
+#pragma compile("txtio.c")
 
 // Cancel Quote and insert mode. 
 inline void txtNoQuoteInsMode(); // ESC-O
