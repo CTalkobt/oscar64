@@ -15,6 +15,9 @@ rem @echo off
 @call :testh opp_vector.cpp
 @if %errorlevel% neq 0 goto :error
 
+@call :testh opp_static_vector.cpp
+@if %errorlevel% neq 0 goto :error
+
 @call :testh opp_vector_string.cpp
 @if %errorlevel% neq 0 goto :error
 
@@ -274,6 +277,15 @@ exit /b %errorlevel%
 ..\bin\oscar64 -e -O2 -n -dHEAPCHECK %~1
 @if %errorlevel% neq 0 goto :error
 
+..\bin\oscar64 -e -O2 -xz -Oz -n %~1
+@if %errorlevel% neq 0 goto :error
+
+..\bin\oscar64 -e -O2 -Oo -n %~1
+@if %errorlevel% neq 0 goto :error
+
+..\bin\oscar64 -e -O2 -Ox -n %~1
+@if %errorlevel% neq 0 goto :error
+
 ..\bin\oscar64 -e -O0 -bc %~1
 @if %errorlevel% neq 0 goto :error
 
@@ -334,6 +346,9 @@ exit /b %errorlevel%
 ..\bin\oscar64 -e -O2 -Oo -n %~1
 @if %errorlevel% neq 0 goto :error
 
+..\bin\oscar64 -e -O2 -Ox -n %~1
+@if %errorlevel% neq 0 goto :error
+
 @exit /b 0
 
 :testb
@@ -374,6 +389,9 @@ exit /b %errorlevel%
 @if %errorlevel% neq 0 goto :error
 
 ..\bin\oscar64 -e -O2 -Oo -n %~1
+@if %errorlevel% neq 0 goto :error
+
+..\bin\oscar64 -e -O2 -Ox -n %~1
 @if %errorlevel% neq 0 goto :error
 
 @exit /b 0

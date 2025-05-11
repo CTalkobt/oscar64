@@ -156,6 +156,7 @@ static const uint32 LOBJF_NO_CROSS		= 0x00000080;
 static const uint32 LOBJF_ZEROPAGE		= 0x00000100;
 static const uint32 LOBJF_FORCE_ALIGN	= 0x00000200;
 static const uint32 LOBJF_ZEROPAGESET = 0x00000400;
+static const uint32 LOBJF_NEVER_CROSS = 0x00000800;
 
 static const uint32 LOBJF_ARG_REG_A = 0x00001000;
 static const uint32 LOBJF_ARG_REG_X = 0x00002000;
@@ -163,6 +164,7 @@ static const uint32 LOBJF_ARG_REG_Y = 0x00004000;
 
 static const uint32 LOBJF_RET_REG_A = 0x00010000;
 static const uint32 LOBJF_RET_REG_X = 0x00020000;
+static const uint32 LOBJF_RET_REG_Y = 0x00020000;
 
 static const uint32 LOBJF_LOCAL_VAR = 0x00100000;
 static const uint32 LOBJF_LOCAL_USED = 0x00200000;
