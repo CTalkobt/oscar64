@@ -516,8 +516,19 @@ Declaration* Parser::ParseStructDeclaration(uint64 flags, DecType dt, Declaratio
 									}
 									else
 									{
+										int alignment = mdec->mBase->mAlignment;
+										if (alignment == 0)
+											alignment = 1;
+
 										bitsleft = 0;
+										if (mdec->mBase->mType == DT_TYPE_ARRAY && mdec->mBase->mBase->IsSimpleType() && mdec->mBase->mBase->mSize > 1)
+											alignment = mdec->mBase->mBase->mSize;
+
+										offset = (offset + alignment - 1) & ~(alignment - 1);
 										offset += mdec->mBase->mSize;
+
+										if (alignment > dec->mAlignment)
+											dec->mAlignment = alignment;
 									}
 
 									if (offset > dec->mSize)
@@ -1008,7 +1019,7 @@ Declaration* Parser::ParseBaseTypeDeclaration(uint64 flags, bool qualified, Decl
 		dec->mSize = 1;
 		dec->mScope = new DeclarationScope(nullptr, SLEVEL_CLASS);
 
-		bool	classTemplate = false;
+		bool	classTemplate = false, baseClass = false;
 
 		mScanner->NextToken();
 
@@ -1041,6 +1052,7 @@ Declaration* Parser::ParseBaseTypeDeclaration(uint64 flags, bool qualified, Decl
 				{
 					dec->mSize = pdec->mSize;
 					dec->mFlags |= pdec->mFlags & DTF_SIGNED;
+					baseClass = true;
 				}
 				else
 					mErrors->Error(pdec->mLocation, EERR_INCOMPATIBLE_TYPES, "Integer base type expected");
@@ -1096,7 +1108,11 @@ Declaration* Parser::ParseBaseTypeDeclaration(uint64 flags, bool qualified, Decl
 					dec->mParams = cdec;
 
 					if (mScanner->mToken == TK_COMMA)
+					{
 						mScanner->NextToken();
+						if (mScanner->mToken == TK_CLOSE_BRACE)
+							break;
+					}
 					else
 						break;
 				}
@@ -1106,13 +1122,33 @@ Declaration* Parser::ParseBaseTypeDeclaration(uint64 flags, bool qualified, Decl
 
 				if (minValue < 0)
 				{
-					dec->mFlags |= DTF_SIGNED;
-					if (minValue < -128 || maxValue > 127)
-						dec->mSize = 2;
+					if (baseClass)
+					{
+						if (dec->mFlags & DTF_SIGNED)
+						{
+							if (minValue < -128 && dec->mSize == 1)
+								mErrors->Error(mScanner->mLocation, EWARN_INVALID_VALUE_RANGE, "Enum constant out of bounds");
+						}
+						else
+							mErrors->Error(mScanner->mLocation, EWARN_INVALID_VALUE_RANGE, "Enum constant out of bounds");
+					}
+					else
+					{
+						dec->mFlags |= DTF_SIGNED;
+						if (minValue < -128 || maxValue > 127)
+							dec->mSize = 2;
+					}
 				}
 				else if (maxValue > 255)
-					dec->mSize = 2;
-
+				{
+					if (baseClass)
+					{
+						if (dec->mSize == 1)
+							mErrors->Error(mScanner->mLocation, EWARN_INVALID_VALUE_RANGE, "Enum constant out of bounds");
+					}
+					else
+						dec->mSize = 2;
+				}
 			}
 
 			if (mScanner->mToken == TK_CLOSE_BRACE)
@@ -1342,8 +1378,18 @@ Declaration* Parser::ParsePostfixDeclaration(void)
 			if (mScanner->mToken != TK_CLOSE_BRACKET)
 			{
 				Expression* exp = ParseRExpression();
-				if (exp->mType == EX_CONSTANT && exp->mDecType->IsIntegerType() && exp->mDecValue->mType == DT_CONST_INTEGER)
-					ndec->mSize = int(exp->mDecValue->mInteger);
+				if (exp->mType == EX_CONSTANT && exp->mDecType->IsIntegerType())
+				{
+					if (exp->mDecValue->mType == DT_CONST_INTEGER)
+						ndec->mSize = int(exp->mDecValue->mInteger);
+					else if (exp->mDecValue->mType == DT_CONST_TEMPLATE)
+					{
+						ndec->mSize = 0;
+						ndec->mTemplate = exp->mDecValue;
+					}
+					else
+						mErrors->Error(exp->mLocation, EERR_CONSTANT_TYPE, "Constant integer expression expected");
+				}
 				else
 					mErrors->Error(exp->mLocation, EERR_CONSTANT_TYPE, "Constant integer expression expected");
 				ndec->mFlags |= DTF_DEFINED;
@@ -1480,7 +1526,7 @@ Declaration * Parser::ParseFunctionDeclaration(Declaration* bdec)
 					adec->mType = DT_ARGUMENT;
 					adec->mVarIndex = vi;
 					adec->mOffset = 0;
-					if (adec->mBase->mType == DT_TYPE_ARRAY)
+					if (adec->mBase->mType == DT_TYPE_ARRAY && !adec->mBase->mTemplate)
 					{
 						Declaration* ndec = new Declaration(adec->mBase->mLocation, DT_TYPE_POINTER);
 						ndec->mBase = adec->mBase->mBase;
@@ -4325,22 +4371,57 @@ Expression* Parser::AddFunctionCallRefReturned(Expression* exp)
 
 				rexp = ConcatExpression(rexp, AddFunctionCallRefReturned(pex));
 
-				if ((pdec->mBase->mType == DT_TYPE_REFERENCE || pdec->mBase->mType == DT_TYPE_RVALUEREF) && 
+				if (pdec->mBase->IsComplexStruct() && pex->mType == EX_CALL && pex->mDecType->mType == DT_TYPE_STRUCT)
+				{
+					Declaration* vdec = AllocTempVar(pex->mDecType);
+
+					Expression* vexp = new Expression(pex->mLocation, EX_VARIABLE);
+					vexp->mDecType = pex->mDecType;
+					vexp->mDecValue = vdec;
+
+					Expression* cexp = new Expression(pex->mLocation, pex->mType);
+					cexp->mDecType = pex->mDecType;
+					cexp->mDecValue = pex->mDecValue;
+					cexp->mLeft = pex->mLeft;
+					cexp->mRight = pex->mRight;
+					cexp->mToken = pex->mToken;
+
+					pex->mType = EX_INITIALIZATION;
+					pex->mToken = TK_ASSIGN;
+					pex->mLeft = vexp;
+					pex->mRight = cexp;
+					pex->mDecValue = nullptr;
+					pex->mDecType = vdec->mBase;
+
+					if (vdec->mBase->mDestructor)
+					{
+						Expression* texp = new Expression(mScanner->mLocation, EX_PREFIX);
+						texp->mToken = TK_BINARY_AND;
+						texp->mLeft = vexp;
+						texp->mDecType = new Declaration(mScanner->mLocation, DT_TYPE_POINTER);
+						texp->mDecType->mFlags |= DTF_CONST | DTF_DEFINED;
+						texp->mDecType->mBase = vdec->mBase;
+						texp->mDecType->mSize = 2;
+
+						Expression* cexp = new Expression(mScanner->mLocation, EX_CONSTANT);
+						cexp->mDecValue = vdec->mBase->mDestructor;
+						cexp->mDecType = cexp->mDecValue->mBase;
+
+						Expression* dexp = new Expression(mScanner->mLocation, EX_CALL);
+						dexp->mLeft = cexp;
+						dexp->mRight = texp;
+
+						rexp = ConcatExpression(rexp, dexp);
+					}
+				}
+				else if ((pdec->mBase->mType == DT_TYPE_REFERENCE || pdec->mBase->mType == DT_TYPE_RVALUEREF) && 
 					(pex->mDecType->mType != DT_TYPE_REFERENCE && pex->mDecType->mType != DT_TYPE_RVALUEREF) && pex->mType == EX_CALL)
 				{
 					// Returning a value object for pass as reference
 					// add a temporary variable
 
 					Declaration* vdec = AllocTempVar(pex->mDecType);
-#if 0
-					int	nindex = mLocalIndex++;
 
-					Declaration* vdec = new Declaration(exp->mLocation, DT_VARIABLE);
-
-					vdec->mVarIndex = nindex;
-					vdec->mBase = pex->mDecType;
-					vdec->mSize = pex->mDecType->mSize;
-#endif
 					Expression* vexp = new Expression(pex->mLocation, EX_VARIABLE);
 					vexp->mDecType = pex->mDecType;
 					vexp->mDecValue = vdec;
@@ -5259,7 +5340,7 @@ Declaration* Parser::ParseDeclaration(Declaration * pdec, bool variable, bool ex
 			npdec = npdec->mBase;
 
 		// Make room for return value pointer on struct return
-		if (npdec->mBase->mType == DT_TYPE_FUNCTION && npdec->mBase->mBase->mType == DT_TYPE_STRUCT)
+		if (npdec->mBase->mType == DT_TYPE_FUNCTION && npdec->mBase->mBase->IsComplexStruct())
 		{
 			Declaration* pdec = npdec->mBase->mParams;
 			while (pdec)
@@ -7232,6 +7313,13 @@ Expression* Parser::ParseQualify(Expression* exp)
 						nexp->mDecType = mdec->mBase;
 						exp = nexp;
 					}
+				}
+				else if (mdec->mType == DT_CONST_INTEGER || mdec->mType == DT_CONST_FLOAT || mdec->mType == DT_CONST_POINTER || mdec->mType == DT_CONST_ADDRESS)
+				{
+					nexp = new Expression(mScanner->mLocation, EX_CONSTANT);
+					nexp->mDecValue = mdec;
+					nexp->mDecType = mdec->mBase;
+					exp = nexp;
 				}
 			}
 			else if (destructor)
@@ -10677,7 +10765,7 @@ Expression* Parser::ParseStatement(void)
 								}
 								conditionExp->mRight->mDecValue->mInteger = endValue;
 
-								Expression* unrollBody = new Expression(mScanner->mLocation, EX_SEQUENCE);
+								Expression* unrollBody = new Expression(mScanner->mLocation, EX_FORBODY);
 								unrollBody->mLeft = bodyExp;
 								Expression* bexp = unrollBody;
 								if ((endValue - startValue) * stepValue > 0)
@@ -10687,7 +10775,7 @@ Expression* Parser::ParseStatement(void)
 										bexp->mRight = new Expression(mScanner->mLocation, EX_SEQUENCE);
 										bexp = bexp->mRight;
 										bexp->mLeft = iterateExp;
-										bexp->mRight = new Expression(mScanner->mLocation, EX_SEQUENCE);
+										bexp->mRight = new Expression(mScanner->mLocation, EX_FORBODY);
 										bexp = bexp->mRight;
 										bexp->mLeft = bodyExp;
 									}
@@ -10697,16 +10785,21 @@ Expression* Parser::ParseStatement(void)
 
 								if (remain)
 								{
-									finalExp = new Expression(mScanner->mLocation, EX_SEQUENCE);
-									finalExp->mLeft = bodyExp;
-									Expression* bexp = finalExp;
+									finalExp = new Expression(mScanner->mLocation, EX_DO);
+									finalExp->mLeft = new Expression(mScanner->mLocation, EX_CONSTANT);
+									finalExp->mLeft->mDecType = TheBoolTypeDeclaration;
+									finalExp->mLeft->mDecValue = TheFalseConstDeclaration;
+
+									finalExp->mRight = new Expression(mScanner->mLocation, EX_FORBODY);
+									finalExp->mRight->mLeft = bodyExp;
+									Expression* bexp = finalExp->mRight;
 
 									for (int i = 1; i < remain; i++)
 									{
 										bexp->mRight = new Expression(mScanner->mLocation, EX_SEQUENCE);
 										bexp = bexp->mRight;
 										bexp->mLeft = iterateExp;
-										bexp->mRight = new Expression(mScanner->mLocation, EX_SEQUENCE);
+										bexp->mRight = new Expression(mScanner->mLocation, EX_FORBODY);
 										bexp = bexp->mRight;
 										bexp->mLeft = bodyExp;
 									}
@@ -10757,7 +10850,7 @@ Expression* Parser::ParseStatement(void)
 					{
 						mFunctionType->mBase = mFunctionType->mBase->DeduceAuto(exp->mLeft->mDecType);
 
-						if (mFunctionType->mBase->mType == DT_TYPE_STRUCT)
+						if (mFunctionType->mBase->IsComplexStruct())
 						{
 							// Make room for value struct return
 							Declaration* p = mFunctionType->mParams;
@@ -10771,7 +10864,7 @@ Expression* Parser::ParseStatement(void)
 					exp->mLeft = CoerceExpression(exp->mLeft, mFunctionType->mBase);
 				}
 				exp->mLeft = CleanupExpression(exp->mLeft);
-				if (exp->mLeft->mType == EX_CONSTRUCT && mFunctionType && mFunctionType->mBase && mFunctionType->mBase->mType == DT_TYPE_STRUCT)
+				if (exp->mLeft->mType == EX_CONSTRUCT && mFunctionType && mFunctionType->mBase && mFunctionType->mBase->IsComplexStruct())
 				{
 					Expression* cexp = exp->mLeft->mLeft->mLeft;
 
@@ -12051,7 +12144,12 @@ void Parser::ParseTemplateDeclarationBody(Declaration * tdec, Declaration * pthi
 				pdec = pdec->mNext;
 			}
 
-			if (pdec && pdec->mTemplate)
+			if (!pdec)
+			{
+				ppdec->mNext = tdec->mBase;
+				tdec->mBase->mNext = nullptr;
+			}
+			else if (pdec->mTemplate)
 			{
 				tdec->mNext = pdec->mTemplate->mNext;
 				pdec->mTemplate->mNext = tdec;

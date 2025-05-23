@@ -1,5 +1,8 @@
 rem @echo off
 
+@call :test rolrortest.cpp
+@if %errorlevel% neq 0 goto :error
+
 @call :test bitfields.cpp
 @if %errorlevel% neq 0 goto :error
 
@@ -36,7 +39,7 @@ rem @echo off
 @call :testh opp_list.cpp
 @if %errorlevel% neq 0 goto :error
 
-@call :testh opp_functional.cpp
+@call :testn opp_functional.cpp
 @if %errorlevel% neq 0 goto :error
 
 @call :testh operatoroverload.cpp
@@ -54,7 +57,7 @@ rem @echo off
 @call :testh constructortest.cpp
 @if %errorlevel% neq 0 goto :error
 
-@call :testh copyconstructor.cpp
+@call :testn copyconstructor.cpp
 @if %errorlevel% neq 0 goto :error
 
 @call :testh copyassign.cpp

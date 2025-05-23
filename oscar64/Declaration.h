@@ -218,6 +218,7 @@ enum ExpressionType
 	EX_IF,
 	EX_ELSE,
 	EX_FOR,
+	EX_FORBODY,
 	EX_DO,
 	EX_SCOPE,
 	EX_BREAK,
@@ -245,6 +246,12 @@ enum ExpressionType
 	EX_AGGREGATE
 };
 
+static const uint32 ANAFL_LHS = (1U << 0);
+static const uint32 ANAFL_RHS = (1U << 1);
+static const uint32 ANAFL_ASSIGN = (1U << 2);
+static const uint32 ANAFL_ALIAS = (1U << 3);
+
+
 class Expression
 {
 public:
@@ -261,6 +268,7 @@ public:
 	AsmInsType				mAsmInsType;
 	AsmInsMode				mAsmInsMode;
 	bool					mConst;
+	uint32					mFlags;
 
 	Expression* LogicInvertExpression(void);
 	Expression* ConstantFold(Errors * errors, LinkerSection* dataSection, Linker * linker = nullptr);
@@ -335,6 +343,8 @@ public:
 	bool IsReference(void) const;
 	bool IsIndexed(void) const;
 	bool ContainsArray(void) const;
+	bool IsShortIntStruct(void) const;
+	bool IsComplexStruct(void) const;
 
 	void SetDefined(void);
 
@@ -385,5 +395,6 @@ extern Declaration* TheBoolTypeDeclaration, * TheFloatTypeDeclaration, * TheVoid
 extern Declaration* TheVoidFunctionTypeDeclaration, * TheConstVoidValueDeclaration;
 extern Declaration* TheCharPointerTypeDeclaration, * TheConstCharPointerTypeDeclaration;
 extern Declaration* TheNullptrConstDeclaration, * TheZeroIntegerConstDeclaration, * TheZeroFloatConstDeclaration, * TheNullPointerTypeDeclaration;
+extern Declaration* TheTrueConstDeclaration, * TheFalseConstDeclaration;
 extern Expression* TheVoidExpression;
 

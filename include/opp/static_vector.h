@@ -4,6 +4,7 @@
 #include <new>
 #include <stdlib.h>
 #include <opp/utility.h>
+#include <oscar.h>
 
 namespace opp {
 
@@ -20,6 +21,9 @@ public:
 
 	static_vector(size_t n) : _size(n) 
 	{
+#ifdef CAPACITYCHECK
+	if (n > N) debugcrash();
+#endif
 		T *	data = (T*)_space;
 		for(size_t i=0; i<n; i++)
 			new (data + i) T();
@@ -28,15 +32,17 @@ public:
 	static_vector(const static_vector & v)
 		: _size(v._size) 
 	{
+		size_t n = _size;
 		T *	data = (T*)_space, * vdata = (T*)(v._space);
-		for(size_t i=0; i<_size; i++)
+		for(size_t i=0; i<n; i++)
 			new (data + i)T(vdata[i]);
 	}
 
 	~static_vector(void)
 	{
 		T *	data = (T*)_space;
-		for(size_t i=0; i<_size; i++)
+		size_t n = _size;
+		for(size_t i=0; i<n; i++)
 			data[i].~T();
 	}
 
@@ -45,10 +51,12 @@ public:
 		if (this != &v)
 		{
 			T *	data = (T*)_space, * vdata = (T*)(v._space);
-			for(size_t i=0; i<_size; i++)
+			size_t n = _size;
+			for(size_t i=0; i<n; i++)
 				data[i].~T();
 			_size = v._size; 
-			for(size_t i=0; i<_size; i++)
+			n = _size;
+			for(size_t i=0; i<n; i++)
 				new (data + i)T(vdata[i]);
 		}
 		return *this;
@@ -198,6 +206,9 @@ void static_vector<T, N>::clear(void)
 template <class T, int N>
 void static_vector<T, N>::resize(size_t n)
 {
+#ifdef CAPACITYCHECK
+	if (n > N) debugcrash();
+#endif
 	T *	data = (T*)_space;
 	if (n < _size)
 	{
@@ -215,12 +226,18 @@ void static_vector<T, N>::resize(size_t n)
 template <class T, int N>
 void static_vector<T, N>::push_back(const T & t)
 {
+#ifdef CAPACITYCHECK
+	if (_size >= N) debugcrash();
+#endif
 	new ((T*)_space + _size++)T(t);
 }
 
 template <class T, int N>
 void static_vector<T, N>::push_back(T && t)
 {
+#ifdef CAPACITYCHECK
+	if (_size >= N) debugcrash();
+#endif
 	new ((T*)_space + _size++)T(t);
 }
 
@@ -228,6 +245,9 @@ template <class T, int N>
 template <typename ...P>
 void static_vector<T, N>::emplace_back(const P&... p)
 {
+#ifdef CAPACITYCHECK
+	if (_size >= N) debugcrash();
+#endif
 	new ((T*)_space + _size++)T(p...);
 }
 
@@ -267,6 +287,9 @@ void static_vector<T, N>::erase(size_t at, size_t n)
 template <class T, int N>
 T * static_vector<T, N>::insert(T * at, const T & t)
 {
+#ifdef CAPACITYCHECK
+	if (_size >= N) debugcrash();
+#endif
 	T *	data = (T*)_space;
 	T * dp = data + _size;
 	new (dp)T();

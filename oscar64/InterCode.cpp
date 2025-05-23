@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <math.h>
 
+#define DISASSEMBLE_OPT	0
+
 static bool CheckFunc;
 static bool CheckCase;
 
@@ -26,6 +28,44 @@ static bool IsIntegerType(InterType type)
 {
 	return type >= IT_INT8 && type <= IT_INT32;
 }
+
+static int64 SignedTypeMin(InterType type)
+{
+	switch (type)
+	{
+	case IT_INT8:
+		return -128;
+	case IT_INT16:
+		return -32768;
+	default:
+		return -0x80000000LL;
+	}
+}
+
+static int64 SignedTypeMax(InterType type)
+{
+	switch (type)
+	{
+	case IT_INT8:
+		return 127;
+	case IT_INT16:
+		return 32767;
+	default:
+		return 0x7fffffff;
+	}
+}
+
+static int64 BuildLowerBitsMask(int64 v)
+{
+	v |= v >> 32;
+	v |= v >> 16;
+	v |= v >> 8;
+	v |= v >> 4;
+	v |= v >> 2;
+	v |= v >> 1;
+	return v;
+}
+
 
 IntegerValueRange::IntegerValueRange(void)
 	: mMinState(S_UNKNOWN), mMaxState(S_UNKNOWN)
@@ -1224,7 +1264,10 @@ static int64 ConstantFolding(InterOperator oper, InterType type, int64 val1, int
 		}
 		break;
 	case IA_SHL:
-		return ToTypedUnsigned(val1 << val2, type);
+		if (val1 < 0 && val2 < 16 && val1 << val2 >= SignedTypeMin(type))
+			return ToTypedSigned(val1 << val2, type);
+		else
+			return ToTypedUnsigned(val1 << val2, type);
 	case IA_SHR:
 		return ToTypedUnsigned(val1, type) >> val2;
 	case IA_SAR:
@@ -6562,11 +6605,13 @@ void InterCodeBasicBlock::CheckValueUsage(InterInstruction * ins, const GrowingI
 					if (iins->mSrc[0].mTemp >= 0 && iins->mSrc[1].mTemp < 0)
 					{
 						ins->mSrc[0].mTemp = iins->mSrc[0].mTemp;
+						ins->mSrc[0].mRange.AddConstValue(IT_INT16, -iins->mSrc[1].mIntConst);
 						ins->mSrc[1].mIntConst += iins->mSrc[1].mIntConst;
 					}
 					else if (iins->mSrc[0].mTemp < 0 && iins->mSrc[1].mTemp >= 0)
 					{
 						ins->mSrc[0].mTemp = iins->mSrc[1].mTemp;
+						ins->mSrc[0].mRange.AddConstValue(IT_INT16, -iins->mSrc[0].mIntConst);
 						ins->mSrc[1].mIntConst += iins->mSrc[0].mIntConst;
 					}
 					else
@@ -6577,6 +6622,7 @@ void InterCodeBasicBlock::CheckValueUsage(InterInstruction * ins, const GrowingI
 					if (iins->mSrc[0].mTemp < 0 && iins->mSrc[1].mTemp >= 0)
 					{
 						ins->mSrc[0].mTemp = iins->mSrc[1].mTemp;
+						ins->mSrc[0].mRange.AddConstValue(IT_INT16, iins->mSrc[0].mIntConst);
 						ins->mSrc[1].mIntConst -= iins->mSrc[0].mIntConst;
 					}
 					else
@@ -8065,43 +8111,6 @@ bool InterCodeBasicBlock::BuildGlobalIntegerRangeSets(bool initial, const Growin
 	}
 
 	return changed;
-}
-
-static int64 SignedTypeMin(InterType type)
-{
-	switch (type)
-	{
-	case IT_INT8:
-		return -128;
-	case IT_INT16:
-		return -32768;
-	default:
-		return -0x80000000LL;
-	}
-}
-
-static int64 SignedTypeMax(InterType type)
-{
-	switch (type)
-	{
-	case IT_INT8:
-		return 127;
-	case IT_INT16:
-		return 32767;
-	default:
-		return 0x7fffffff;
-	}
-}
-
-static int64 BuildLowerBitsMask(int64 v)
-{
-	v |= v >> 32;
-	v |= v >> 16;
-	v |= v >> 8;
-	v |= v >> 4;
-	v |= v >> 2;
-	v |= v >> 1;
-	return v;
 }
 
 void InterCodeBasicBlock::UnionIntegerRanges(const InterCodeBasicBlock* block)
@@ -11406,6 +11415,35 @@ bool InterCodeBasicBlock::SimplifyIntegerNumeric(const GrowingInstructionPtrArra
 						}
 					}
 
+
+					break;
+#endif
+#if 1
+				case IA_SUB:
+					if (ins->mSrc[0].mTemp < 0 && ins->mSrc[1].mTemp >= 0 && ltvalue[ins->mSrc[1].mTemp] && ins->mSrc[1].mFinal)
+					{
+						InterInstruction* pins = ltvalue[ins->mSrc[1].mTemp];
+
+						if (pins->mCode == IC_BINARY_OPERATOR && pins->mOperator == IA_ADD)
+						{
+							if (pins->mSrc[0].mTemp < 0)
+							{
+								ins->mOperator = IA_ADD;
+								ins->mSrc[1].Forward(pins->mSrc[1]);
+								pins->mSrc[1].mFinal = false;
+								ins->mSrc[0].mIntConst = pins->mSrc[0].mIntConst - ins->mSrc[0].mIntConst;
+								changed = true;
+							}
+							else if (pins->mSrc[1].mTemp < 0)
+							{
+								ins->mOperator = IA_ADD;
+								ins->mSrc[1].Forward(pins->mSrc[0]);
+								pins->mSrc[0].mFinal = false;
+								ins->mSrc[0].mIntConst = pins->mSrc[1].mIntConst - ins->mSrc[0].mIntConst;
+								changed = true;
+							}
+						}
+					}
 
 					break;
 #endif
@@ -18635,6 +18673,117 @@ bool InterCodeBasicBlock::SingleBlockLoopPointerSplit(int& spareTemps)
 	return changed;
 }
 
+bool InterCodeBasicBlock::Flatten2DLoop(void)
+{
+	return false;
+
+	bool	changed = false;
+
+	if (!mVisited)
+	{
+		mVisited = true;
+
+		if (mLoopHead && mNumEntries == 2 && !mFalseJump && mTrueJump && mTrueJump->mNumEntries == 1 && !mTrueJump->mFalseJump && mTrueJump->mInstructions.Size() == 1)
+		{
+			InterCodeBasicBlock* lblock = mTrueJump->mTrueJump;
+
+			if (lblock->mLoopHead && lblock->mNumEntries == 2 && lblock->mTrueJump == lblock)
+			{
+				InterCodeBasicBlock* eblock = lblock->mFalseJump;
+
+				if (eblock && eblock->mNumEntries == 1 && eblock->mTrueJump == this)
+				{
+					int esz = eblock->mInstructions.Size();
+					if (esz >= 3 &&
+						eblock->mInstructions[esz - 1]->mCode == IC_BRANCH &&
+						eblock->mInstructions[esz - 2]->mCode == IC_RELATIONAL_OPERATOR && eblock->mInstructions[esz - 2]->mDst.mTemp == eblock->mInstructions[esz - 1]->mSrc[0].mTemp &&
+						(eblock->mInstructions[esz - 2]->mOperator == IA_CMPLU || eblock->mInstructions[esz - 2]->mOperator == IA_CMPNE) &&
+						eblock->mInstructions[esz - 2]->mSrc[0].mTemp < 0 && eblock->mInstructions[esz - 2]->mSrc[1].IsUnsigned() && eblock->mInstructions[esz - 2]->mSrc[1].mRange.mMaxValue <= eblock->mInstructions[esz - 2]->mSrc[0].mIntConst &&
+						eblock->mInstructions[esz - 3]->mCode == IC_BINARY_OPERATOR && eblock->mInstructions[esz - 3]->mDst.mTemp == eblock->mInstructions[esz - 2]->mSrc[1].mTemp &&
+						eblock->mInstructions[esz - 3]->mDst.mTemp == eblock->mInstructions[esz - 3]->mSrc[1].mTemp &&
+						eblock->mInstructions[esz - 3]->mSrc[0].mTemp < 0 && eblock->mInstructions[esz - 3]->mSrc[0].mIntConst == 1)
+					{
+						int otemp = eblock->mInstructions[esz - 3]->mDst.mTemp;
+						int sz = mInstructions.Size();
+						if (sz == 3 &&
+							mInstructions[0]->mCode == IC_BINARY_OPERATOR && (mInstructions[0]->mOperator == IA_SHL || mInstructions[0]->mOperator == IA_MUL) && 
+							mInstructions[0]->mSrc[0].mTemp < 0 && mInstructions[0]->mSrc[1].mTemp == otemp)
+						{
+							int64 scale = mInstructions[0]->mSrc[0].mIntConst;
+							if (mInstructions[0]->mOperator == IA_SHL)
+								scale = 1LL << scale;
+
+							if (mInstructions[1]->mCode == IC_CONSTANT && mInstructions[1]->mConst.mIntConst == 0)
+							{
+								int ilz = lblock->mInstructions.Size();
+								if (ilz >= 3 &&
+									lblock->mInstructions[ilz - 1]->mCode == IC_BRANCH &&
+									lblock->mInstructions[ilz - 2]->mCode == IC_RELATIONAL_OPERATOR && lblock->mInstructions[ilz - 2]->mDst.mTemp == lblock->mInstructions[ilz - 1]->mSrc[0].mTemp &&
+									(lblock->mInstructions[ilz - 2]->mOperator == IA_CMPLU || lblock->mInstructions[ilz - 2]->mOperator == IA_CMPNE) &&
+									lblock->mInstructions[ilz - 2]->mSrc[0].mTemp < 0 && lblock->mInstructions[ilz - 2]->mSrc[1].IsUnsigned() && lblock->mInstructions[ilz - 2]->mSrc[1].mRange.mMaxValue <= lblock->mInstructions[ilz - 2]->mSrc[0].mIntConst &&
+									lblock->mInstructions[ilz - 3]->mCode == IC_BINARY_OPERATOR && lblock->mInstructions[ilz - 3]->mDst.mTemp == lblock->mInstructions[ilz - 2]->mSrc[1].mTemp &&
+									lblock->mInstructions[ilz - 3]->mDst.mTemp == lblock->mInstructions[ilz - 3]->mSrc[1].mTemp &&
+									lblock->mInstructions[ilz - 3]->mSrc[0].mTemp < 0 && lblock->mInstructions[ilz - 3]->mSrc[0].mIntConst == 1)
+								{
+									int itemp = lblock->mInstructions[ilz - 3]->mDst.mTemp;
+									int64 icount = lblock->mInstructions[ilz - 2]->mSrc[0].mIntConst;
+
+									if (itemp == mInstructions[1]->mDst.mTemp && icount == scale &&
+										!eblock->mEntryRequiredTemps[itemp] &&
+										!eblock->mFalseJump->mEntryRequiredTemps[otemp])
+									{
+										if (lblock->mInstructions[0]->mCode == IC_BINARY_OPERATOR && lblock->mInstructions[0]->mOperator == IA_ADD &&
+											((lblock->mInstructions[0]->mSrc[0].mTemp == itemp &&	lblock->mInstructions[0]->mSrc[1].mTemp == mInstructions[0]->mDst.mTemp) ||
+											 (lblock->mInstructions[0]->mSrc[1].mTemp == itemp && lblock->mInstructions[0]->mSrc[0].mTemp == mInstructions[0]->mDst.mTemp)) &&
+											!IsTempReferencedInRange(2, sz, itemp) &&
+											!IsTempReferencedInRange(2, sz, otemp) &&
+											!lblock->IsTempReferencedInRange(1, ilz - 3, itemp) &&
+											!lblock->IsTempReferencedInRange(1, ilz - 3, otemp) &&
+											!eblock->IsTempReferencedInRange(0, esz - 3, otemp))
+										{
+											// Extend loop range
+											int64 xcount = eblock->mInstructions[esz - 2]->mSrc->mIntConst * scale;
+
+											eblock->mInstructions[esz - 2]->mSrc[0].mIntConst = xcount;
+											eblock->mInstructions[esz - 2]->mSrc[1].mRange.mMaxValue = xcount;
+											eblock->mInstructions[esz - 3]->mSrc[1].mRange.mMaxValue = xcount - 1;
+											eblock->mInstructions[esz - 3]->mDst.mRange.mMaxValue = xcount;
+
+											lblock->mInstructions[ilz - 1]->mCode = IC_JUMP; lblock->mInstructions[ilz - 1]->mNumOperands = 0;
+											lblock->mTrueJump = eblock;
+											lblock->mFalseJump = nullptr;
+											lblock->mLoopHead = false;
+											lblock->mNumEntries = 1;
+
+											lblock->mInstructions[0]->mCode = IC_LOAD_TEMPORARY;
+											lblock->mInstructions[0]->mNumOperands = 1;
+											lblock->mInstructions[0]->mSrc[0] = eblock->mInstructions[esz - 3]->mSrc[1];
+
+											mEntryValueRange[otemp].mMaxValue = xcount - 1;
+											lblock->mEntryValueRange[otemp].mMaxValue = xcount - 1;
+											eblock->mEntryValueRange[otemp].mMaxValue = xcount - 1;
+
+											changed = true;
+											printf("oopsie");
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if (mTrueJump && mTrueJump->Flatten2DLoop())
+			changed = true;
+		if (mFalseJump && mFalseJump->Flatten2DLoop())
+			changed = true;
+	}
+
+	return changed;
+}
+
 bool InterCodeBasicBlock::PostDecLoopOptimization(void)
 {
 	bool	changed = false;
@@ -20728,6 +20877,24 @@ bool InterCodeBasicBlock::PeepholeReplaceOptimization(const GrowingVariableArray
 				mInstructions[i + 1]->mSrc[1].mRange.Reset();
 				changed = true;
 			}
+
+			if (i + 3 < mInstructions.Size() &&
+				mInstructions[i + 0]->mCode == IC_BINARY_OPERATOR && mInstructions[i + 0]->mOperator == IA_ADD && mInstructions[i + 0]->mSrc[0].mTemp < 0 &&
+				mInstructions[i + 0]->mDst.IsUByte() && mInstructions[i + 0]->mSrc[1].IsUByte() &&
+				mInstructions[i + 1]->mCode == IC_CONVERSION_OPERATOR && mInstructions[i + 1]->mOperator == IA_EXT8TO16U &&
+				mInstructions[i + 1]->mSrc[0].mTemp == mInstructions[i + 0]->mDst.mTemp && mInstructions[i + 1]->mSrc[0].mFinal &&
+				mInstructions[i + 2]->mCode == IC_LEA && mInstructions[i + 2]->mSrc[1].mTemp >= 0 &&
+				mInstructions[i + 2]->mSrc[0].mTemp == mInstructions[i + 1]->mDst.mTemp && mInstructions[i + 2]->mSrc[0].mFinal &&
+				mInstructions[i + 3]->mCode == IC_STORE &&
+				mInstructions[i + 3]->mSrc[1].mTemp == mInstructions[i + 2]->mDst.mTemp && mInstructions[i + 3]->mSrc[1].mFinal)
+			{
+				mInstructions[i + 3]->mSrc[1].mIntConst += mInstructions[i + 0]->mSrc[0].mIntConst;
+				mInstructions[i + 1]->mSrc[0] = mInstructions[i + 0]->mSrc[1];
+				mInstructions[i + 1]->mDst.mRange = mInstructions[i + 0]->mSrc[1].mRange;
+				mInstructions[i + 2]->mSrc[0].mRange = mInstructions[i + 0]->mSrc[1].mRange;
+				changed = true;
+			}
+
 
 			if (i + 3 < mInstructions.Size() &&
 				mInstructions[i + 0]->mCode == IC_BINARY_OPERATOR && mInstructions[i + 0]->mOperator == IA_SHR &&
@@ -23572,7 +23739,7 @@ void InterCodeProcedure::Close(void)
 {
 	GrowingTypeArray	tstack(IT_NONE);
 	
-	CheckFunc = !strcmp(mIdent->mString, "mbox::configure_animations");
+	CheckFunc = !strcmp(mIdent->mString, "main");
 	CheckCase = false;
 
 	mEntryBlock = mBlocks[0];
@@ -23990,6 +24157,19 @@ void InterCodeProcedure::Close(void)
 	LoadStoreForwarding(paramMemory);
 
 	RebuildIntegerRangeSet();
+#endif
+
+#if 1
+	BuildLoopPrefix();
+	DisassembleDebug("added dominators");
+
+	BuildDataFlowSets();
+
+	ResetVisited();
+	mEntryBlock->Flatten2DLoop();
+
+	DisassembleDebug("Flatten2DLoop");
+
 #endif
 
 #if 1
@@ -24510,12 +24690,26 @@ void InterCodeProcedure::Close(void)
 	EliminateDoubleLoopCounter();
 	DisassembleDebug("EliminateDoubleLoopCounter");
 
+
 	ResetVisited();
 	mEntryBlock->SingleLoopCountZeroCheck();
 
 	RemoveUnusedPartialStoreInstructions();
 
 	PeepholeOptimization();
+
+	ResetVisited();
+	if (mEntryBlock->Flatten2DLoop())
+	{
+		DisassembleDebug("Flatten2DLoop");
+
+		ConstLoopOptimization();
+
+		BuildDataFlowSets();
+		TempForwarding(false, true);
+
+		PeepholeOptimization();
+	}
 
 	MapVariables();
 
@@ -25523,7 +25717,7 @@ void InterCodeProcedure::Disassemble(FILE* file)
 
 void InterCodeProcedure::Disassemble(const char* name, bool dumpSets)
 {
-#if 0
+#if DISASSEMBLE_OPT
 #ifdef _WIN32
 	FILE* file;
 	static bool	initial = true;

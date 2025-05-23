@@ -275,14 +275,22 @@ bool GlobalOptimizer::ReplaceGlobalConst(Expression* exp)
 	{
 		if (exp->mType == EX_VARIABLE && (exp->mDecValue->mFlags & (DTF_GLOBAL | DTF_STATIC)) && !(exp->mDecValue->mOptFlags & (OPTF_VAR_MODIFIED | OPTF_VAR_ADDRESS)) && exp->mDecValue->mValue)
 		{
+
 			Expression* cexp = exp->mDecValue->mValue;
-			if (cexp->mType == EX_CONSTANT && 
-				(cexp->mDecValue->mType == DT_CONST_ADDRESS || cexp->mDecValue->mType == DT_CONST_INTEGER || 
-				 cexp->mDecValue->mType == DT_CONST_POINTER || cexp->mDecValue->mType == DT_CONST_FLOAT))
+			if (cexp->mType == EX_CONSTANT)
 			{
-				exp->mType = EX_CONSTANT;				
-				exp->mDecValue = cexp->mDecValue->ConstCast(exp->mDecType);
-				changed = true;
+
+				if (cexp->mDecValue->mType == DT_CONST_ADDRESS || cexp->mDecValue->mType == DT_CONST_INTEGER ||
+					cexp->mDecValue->mType == DT_CONST_POINTER || cexp->mDecValue->mType == DT_CONST_FLOAT)
+				{
+					exp->mType = EX_CONSTANT;
+					exp->mDecValue = cexp->mDecValue->ConstCast(exp->mDecType);
+					changed = true;
+				}
+				else if (exp->mDecValue->mBase->mType == DT_TYPE_STRUCT)
+				{
+					exp->mDecValue->mBase = exp->mDecValue->mBase->ToConstType();
+				}
 			}
 		}
 
@@ -454,7 +462,7 @@ void GlobalOptimizer::AnalyzeProcedure(Expression* exp, Declaration* procDec)
 			Analyze(exp, procDec, false);
 		}
 		else
-			mErrors->Error(procDec->mLocation, EERR_UNDEFINED_OBJECT, "Calling undefined function", procDec->mQualIdent);
+			mErrors->Error(procDec->mLocation, EERR_UNDEFINED_OBJECT, "Calling undefined function", procDec->FullIdent());
 
 		procDec->mOptFlags &= ~OPTF_ANALYZING;
 	}
@@ -605,10 +613,6 @@ void GlobalOptimizer::RegisterProc(Declaration* to)
 		}
 	}
 }
-
-static const uint32 ANAFL_LHS		=	(1U << 0);
-static const uint32 ANAFL_RHS		=	(1U << 1);
-static const uint32 ANAFL_ASSIGN	=	(1U << 2);
 
 Declaration* GlobalOptimizer::Analyze(Expression* exp, Declaration* procDec, uint32 flags)
 {
@@ -821,6 +825,22 @@ Declaration* GlobalOptimizer::Analyze(Expression* exp, Declaration* procDec, uin
 								pdec->mOptFlags |= OPTF_VAR_CONST;
 							}
 						}
+						else if (pex->mType == EX_VARIABLE && pdec->mBase->mType == DT_TYPE_POINTER && pex->mDecType->mType == DT_TYPE_ARRAY && (pex->mDecValue->mFlags & (DTF_GLOBAL | DTF_STATIC)) && pdec->mBase->CanAssign(pex->mDecType))
+						{
+							if (pdec->mOptFlags & OPTF_VAR_CONST)
+							{
+								if (pdec->mValue->mType != EX_VARIABLE || pdec->mValue->mDecValue != pex->mDecValue)
+								{
+									pdec->mOptFlags |= OPTF_VAR_NOCONST;
+									pdec->mOptFlags &= ~OPTF_VAR_CONST;
+								}
+							}
+							else
+							{
+								pdec->mValue = pex;
+								pdec->mOptFlags |= OPTF_VAR_CONST;
+							}
+						}
 						else
 						{
 							pdec->mOptFlags |= OPTF_VAR_NOCONST;
@@ -965,6 +985,11 @@ Declaration* GlobalOptimizer::Analyze(Expression* exp, Declaration* procDec, uin
 		rdec = Analyze(exp->mRight, procDec, 0);
 		if (exp->mLeft->mLeft->mRight)
 			ldec = Analyze(exp->mLeft->mLeft->mRight, procDec, 0);
+		break;
+	case EX_FORBODY:
+		ldec = Analyze(exp->mLeft, procDec, 0);
+		if (exp->mRight)
+			rdec = Analyze(exp->mRight, procDec, 0);
 		break;
 	case EX_DO:
 		ldec = Analyze(exp->mRight, procDec, 0);
